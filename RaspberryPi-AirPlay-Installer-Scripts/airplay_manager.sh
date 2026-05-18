@@ -64,6 +64,20 @@ current_name() {
         | head -1 | sed -E 's/.*"([^"]*)".*/\1/' || true
 }
 
+spotify_installed() {
+    dpkg -l raspotify 2>/dev/null | grep -q '^ii'
+}
+
+spotify_status_line() {
+    if ! spotify_installed; then
+        echo "not installed"
+    elif systemctl is-active --quiet raspotify 2>/dev/null; then
+        echo "active"
+    else
+        echo "inactive"
+    fi
+}
+
 while true; do
     clear
     cecho "green" "╔═════════════════════════════════════════════════════╗"
@@ -72,8 +86,9 @@ while true; do
     echo
     if is_installed; then
         cecho "green" "  ✓ Shairport-Sync installed"
-        cecho "blue"  "    Service:      $(service_status_line)"
-        cecho "blue"  "    AirPlay name: $(current_name)"
+        cecho "blue"  "    AirPlay service:  $(service_status_line)"
+        cecho "blue"  "    AirPlay name:     $(current_name)"
+        cecho "blue"  "    Spotify Connect:  $(spotify_status_line)"
     else
         cecho "yellow" "  ⚠ Shairport-Sync NOT installed."
     fi

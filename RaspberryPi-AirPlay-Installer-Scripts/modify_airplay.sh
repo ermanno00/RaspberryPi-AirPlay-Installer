@@ -13,6 +13,8 @@ IFS=$'\n\t'
 SCRIPT_VERSION="1.0"
 CONFIG_FILE="/etc/shairport-sync.conf"
 SERVICE_NAME="shairport-sync"
+RASPOTIFY_CONF="/etc/raspotify/conf"
+SPOTIFY_ZEROCONF_PORT="5354"
 
 # --- Helpers ---
 cecho() {
@@ -86,6 +88,53 @@ current_output_device() {
 current_mixer() {
     grep -oE '^[[:space:]]*mixer_control_name[[:space:]]*=[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null \
         | head -1 | sed -E 's/.*"([^"]*)".*/\1/' || true
+}
+
+# --- Spotify helpers ---
+spotify_installed() {
+    dpkg -l raspotify 2>/dev/null | grep -q '^ii'
+}
+
+spotify_current_name() {
+    [ -f "$RASPOTIFY_CONF" ] || { echo ""; return; }
+    grep -oE '^[[:space:]]*LIBRESPOT_NAME[[:space:]]*=[[:space:]]*"[^"]*"' "$RASPOTIFY_CONF" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]*)".*/\1/' || true
+}
+
+spotify_current_device() {
+    [ -f "$RASPOTIFY_CONF" ] || { echo ""; return; }
+    grep -oE '^[[:space:]]*LIBRESPOT_DEVICE[[:space:]]*=[[:space:]]*"[^"]*"' "$RASPOTIFY_CONF" 2>/dev/null \
+        | head -1 | sed -E 's/.*"([^"]*)".*/\1/' || true
+}
+
+write_spotify_managed_block() {
+    # Args: name, device
+    local name="$1" device="$2"
+    sudo sed -i '/^# >>> airplay-installer >>>$/,/^# <<< airplay-installer <<<$/d' "$RASPOTIFY_CONF"
+    sudo tee -a "$RASPOTIFY_CONF" > /dev/null <<EOF
+# >>> airplay-installer >>>
+LIBRESPOT_NAME="$name"
+LIBRESPOT_DEVICE="$device"
+LIBRESPOT_BITRATE="320"
+LIBRESPOT_INITIAL_VOLUME="100"
+LIBRESPOT_ZEROCONF_PORT="$SPOTIFY_ZEROCONF_PORT"
+# <<< airplay-installer <<<
+EOF
+}
+
+restart_spotify() {
+    cecho "blue" "Restarting raspotify..."
+    if sudo systemctl restart raspotify 2>/dev/null; then
+        sleep 2
+        if systemctl is-active --quiet raspotify; then
+            cecho "green" "✓ raspotify is running"
+        else
+            cecho "red" "✗ raspotify is not active after restart"
+            sudo systemctl status raspotify --no-pager -l | tail -15
+        fi
+    else
+        cecho "red" "✗ Failed to restart raspotify"
+    fi
 }
 
 # --- Actions ---
@@ -312,6 +361,118 @@ action_service_status() {
     sudo systemctl status nqptp --no-pager -l | head -10 || true
 }
 
+# --- Spotify actions ---
+action_install_spotify() {
+    if spotify_installed; then
+        cecho "yellow" "raspotify is already installed."
+        read -p "Reinstall / refresh configuration? (y/N): " ans || true
+        [[ ! "$ans" =~ ^[Yy]$ ]] && { cecho "yellow" "Cancelled."; return; }
+    fi
+
+    local cur_dev cur_name spotify_name
+    cur_dev=$(current_output_device)
+    cur_name=$(current_name)
+    if [ -z "$cur_dev" ]; then
+        cecho "red" "❌ No AirPlay output_device configured. Configure AirPlay audio first."
+        return
+    fi
+
+    echo
+    read -p "Spotify device name (Enter for '$cur_name'): " spotify_name || true
+    [ -z "$spotify_name" ] && spotify_name="$cur_name"
+    spotify_name=$(echo "$spotify_name" | sed 's/[^a-zA-Z0-9 _-]//g')
+    if [ -z "$spotify_name" ]; then
+        cecho "red" "Name became empty after sanitization. Cancelled."
+        return
+    fi
+
+    if [ ! -f /etc/apt/sources.list.d/raspotify.list ]; then
+        cecho "yellow" "Adding raspotify apt repository..."
+        if ! curl -fsSL https://dtcooper.github.io/raspotify/key.asc \
+                | sudo tee /usr/share/keyrings/raspotify_key.asc > /dev/null; then
+            cecho "red" "❌ Failed to fetch raspotify repository key. Cancelled."
+            return
+        fi
+        sudo chmod 644 /usr/share/keyrings/raspotify_key.asc
+        echo 'deb [signed-by=/usr/share/keyrings/raspotify_key.asc] https://dtcooper.github.io/raspotify raspotify main' \
+            | sudo tee /etc/apt/sources.list.d/raspotify.list > /dev/null
+        sudo apt-get update -qq || true
+    fi
+
+    cecho "blue" "Installing raspotify..."
+    if ! sudo apt-get install -y raspotify; then
+        cecho "red" "❌ Failed to install raspotify."
+        return
+    fi
+
+    if [ ! -f "$RASPOTIFY_CONF" ]; then
+        cecho "red" "❌ $RASPOTIFY_CONF not found after install."
+        return
+    fi
+
+    write_spotify_managed_block "$spotify_name" "$cur_dev"
+    cecho "green" "✓ raspotify configured: '$spotify_name' on $cur_dev"
+
+    sudo systemctl enable raspotify >/dev/null 2>&1 || true
+    restart_spotify
+}
+
+action_uninstall_spotify() {
+    if ! spotify_installed; then
+        cecho "yellow" "raspotify is not installed."
+        return
+    fi
+    read -p "Remove Spotify Connect (raspotify)? (y/N): " ans || true
+    [[ ! "$ans" =~ ^[Yy]$ ]] && { cecho "yellow" "Cancelled."; return; }
+
+    sudo systemctl stop raspotify 2>/dev/null || true
+    sudo systemctl disable raspotify 2>/dev/null || true
+    sudo apt-get remove --purge -y raspotify || true
+    sudo rm -f /etc/apt/sources.list.d/raspotify.list
+    sudo rm -f /usr/share/keyrings/raspotify_key.asc
+    cecho "green" "✓ Spotify Connect removed"
+}
+
+action_change_spotify_name() {
+    if ! spotify_installed; then
+        cecho "yellow" "raspotify is not installed."
+        return
+    fi
+    local cur new_name
+    cur=$(spotify_current_name)
+    cecho "blue" "Current Spotify name: ${cur:-<not set>}"
+    echo
+    read -p "Enter new name (empty to cancel): " new_name || true
+    [ -z "$new_name" ] && { cecho "yellow" "Cancelled."; return; }
+    new_name=$(echo "$new_name" | sed 's/[^a-zA-Z0-9 _-]//g')
+    [ -z "$new_name" ] && { cecho "red" "Name became empty after sanitization."; return; }
+
+    local cur_dev
+    cur_dev=$(spotify_current_device)
+    [ -z "$cur_dev" ] && cur_dev=$(current_output_device)
+    write_spotify_managed_block "$new_name" "$cur_dev"
+    cecho "green" "✓ Spotify name updated to '$new_name'"
+    restart_spotify
+}
+
+action_sync_spotify_to_airplay() {
+    if ! spotify_installed; then
+        cecho "yellow" "raspotify is not installed."
+        return
+    fi
+    local cur_dev cur_spo_name
+    cur_dev=$(current_output_device)
+    if [ -z "$cur_dev" ]; then
+        cecho "red" "No AirPlay output_device configured."
+        return
+    fi
+    cur_spo_name=$(spotify_current_name)
+    [ -z "$cur_spo_name" ] && cur_spo_name=$(current_name)
+    write_spotify_managed_block "$cur_spo_name" "$cur_dev"
+    cecho "green" "✓ Spotify audio device synced to $cur_dev"
+    restart_spotify
+}
+
 # --- Menu ---
 main() {
     require_install
@@ -322,35 +483,52 @@ main() {
         cecho "magenta" "   AirPlay 2 — Modify Existing Installation  v$SCRIPT_VERSION"
         cecho "magenta" "═══════════════════════════════════════════════════════"
         echo
-        cecho "yellow" "  Current name:   $(current_name)"
-        cecho "yellow" "  Current device: $(current_output_device)"
-        cecho "yellow" "  Current mixer:  $(current_mixer)"
+        cecho "yellow" "  AirPlay name:   $(current_name)"
+        cecho "yellow" "  Audio device:   $(current_output_device)"
+        cecho "yellow" "  Mixer:          $(current_mixer)"
+        if spotify_installed; then
+            cecho "yellow" "  Spotify:        installed — $(spotify_current_name)"
+        else
+            cecho "yellow" "  Spotify:        not installed"
+        fi
         echo
-        echo "  1) Change AirPlay name"
-        echo "  2) Change audio output device"
-        echo "  3) Change mixer / hardware volume control"
-        echo "  4) Change volume limits (volume_max_db, default_airplay_volume)"
-        echo "  5) Test audio output"
-        echo "  6) View configuration"
-        echo "  7) Show service status"
-        echo "  8) Restart service"
-        echo "  9) Edit configuration file manually (nano)"
-        echo "  0) Exit"
+        cecho "cyan" " AirPlay:"
+        echo "   1) Change AirPlay name"
+        echo "   2) Change audio output device"
+        echo "   3) Change mixer / hardware volume control"
+        echo "   4) Change volume limits (volume_max_db, default_airplay_volume)"
+        echo "   5) Test audio output"
+        echo "   6) View configuration"
+        echo "   7) Show service status"
+        echo "   8) Restart service"
+        echo "   9) Edit configuration file manually (nano)"
+        echo
+        cecho "cyan" " Spotify Connect:"
+        echo "  10) Install / reconfigure Spotify Connect"
+        echo "  11) Change Spotify device name"
+        echo "  12) Sync Spotify audio device to AirPlay one"
+        echo "  13) Uninstall Spotify Connect"
+        echo
+        echo "   0) Exit"
         echo
         local choice
         read -p "Choose: " choice || true
         case "$choice" in
-            1) action_change_name ;;
-            2) action_change_audio_device ;;
-            3) action_change_mixer ;;
-            4) action_change_volume_limits ;;
-            5) action_test_audio ;;
-            6) action_view_config ;;
-            7) action_service_status ;;
-            8) restart_service ;;
-            9) sudo nano "$CONFIG_FILE" && restart_service ;;
+            1)  action_change_name ;;
+            2)  action_change_audio_device ;;
+            3)  action_change_mixer ;;
+            4)  action_change_volume_limits ;;
+            5)  action_test_audio ;;
+            6)  action_view_config ;;
+            7)  action_service_status ;;
+            8)  restart_service ;;
+            9)  sudo nano "$CONFIG_FILE" && restart_service ;;
+            10) action_install_spotify ;;
+            11) action_change_spotify_name ;;
+            12) action_sync_spotify_to_airplay ;;
+            13) action_uninstall_spotify ;;
             0|q|Q|"") cecho "blue" "Bye!"; return 0 ;;
-            *) cecho "red" "Invalid choice." ;;
+            *)  cecho "red" "Invalid choice." ;;
         esac
     done
 }

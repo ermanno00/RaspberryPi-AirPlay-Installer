@@ -1,6 +1,6 @@
 # RaspberryPi-AirPlay-Installer 📻
 
-Turn any Raspberry Pi (Zero 2 W, 3, 4, 5) into a modern, high-quality **AirPlay 2** receiver in just a few minutes. This project automates the entire build of [Shairport-Sync](https://github.com/mikebrady/shairport-sync) + [NQPTP](https://github.com/mikebrady/nqptp) with a set of robust, interactive scripts.
+Turn any Raspberry Pi (Zero 2 W, 3, 4, 5) into a modern, high-quality **AirPlay 2** receiver — and, optionally, a **Spotify Connect** endpoint — in just a few minutes. This project automates the entire build of [Shairport-Sync](https://github.com/mikebrady/shairport-sync) + [NQPTP](https://github.com/mikebrady/nqptp) and the install/configuration of [raspotify](https://github.com/dtcooper/raspotify) with a set of robust, interactive scripts.
 
 > **If you find this project helpful, please consider giving it a ⭐ star on GitHub!**
 
@@ -12,6 +12,7 @@ Turn any Raspberry Pi (Zero 2 W, 3, 4, 5) into a modern, high-quality **AirPlay 
 * **🤖 Fully automated** — Handles system update, dependencies, compiling and configuration.
 * **✅ Smart pre-flight checks** — Validates internet, disk space, memory and detected hardware before changing anything.
 * **🔊 Flexible audio** — Works with **USB DAC**, **audio HAT**, or the **Raspberry Pi's built-in audio** (3.5mm jack / HDMI). All detected devices are listed and labelled `[built-in]` / `[external/DAC]`.
+* **🎧 Optional Spotify Connect** — Installer can also set up `raspotify` (librespot) so the same Pi appears as a Spotify Connect endpoint. Coexists with AirPlay; one source plays at a time.
 * **🛠️ Idempotent management** — Dedicated scripts to **modify** or **uninstall** an existing installation without reinstalling from scratch.
 * **🎚️ Volume control aware** — Auto-selects the best ALSA mixer (`PCM`, `Master`, `Speaker`, ...) and falls back to software volume if no hardware mixer is available.
 * **🔁 Rollback on failure** — Backs up configuration files and cleans up on failed installs.
@@ -95,6 +96,16 @@ The interactive menu provides:
 
 All changes are written to `/etc/shairport-sync.conf` and the service is restarted automatically.
 
+The Spotify Connect section of the same menu lets you:
+
+* Install / reconfigure Spotify Connect (raspotify)
+* Change the Spotify device name (independent from the AirPlay one)
+* Sync the Spotify audio device to the current AirPlay one
+* Uninstall Spotify Connect
+
+> **Spotify Premium is required** on the controller device.
+> Shairport-Sync and raspotify share the same ALSA card, so only one source can play at a time — the inactive one releases the device automatically, no extra config needed.
+
 ---
 
 ## 🧹 Uninstalling
@@ -110,6 +121,7 @@ Removes:
 * systemd units (`shairport-sync.service`, `nqptp.service`)
 * The `shairport-sync` user and group
 * UFW firewall rules added during install (`5353/udp`, `319/udp`, `320/udp`, `7000/tcp`)
+* `raspotify` package + apt repository, if Spotify Connect was installed
 
 A backup of the current config is saved under `/tmp/airplay_uninstall_backup_<timestamp>/` before anything is deleted.
 
@@ -163,6 +175,7 @@ sudo systemctl restart shairport-sync
 ## 🙏 Credits
 
 * [Mike Brady](https://github.com/mikebrady) — author of Shairport-Sync and NQPTP, the upstream projects that make all of this possible.
+* [David Cooper](https://github.com/dtcooper) — author of [raspotify](https://github.com/dtcooper/raspotify), used here for optional Spotify Connect support.
 * Original installer scripts: [Techposts/RaspberryPi-AirPlay-Installer](https://github.com/Techposts/RaspberryPi-AirPlay-Installer).
 
 ---

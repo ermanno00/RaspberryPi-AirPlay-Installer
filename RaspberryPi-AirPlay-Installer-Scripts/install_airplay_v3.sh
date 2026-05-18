@@ -5,6 +5,7 @@
 #
 # Tailored for: Raspberry Pi (Zero 2/3/4/5) with USB DAC, audio HAT
 #               or built-in audio (3.5mm jack / HDMI)
+# Optional:     Spotify Connect support via the raspotify package
 # Version: 3.0 - Production Ready
 # Features:
 #   - Comprehensive error handling with rollback capability
@@ -35,6 +36,12 @@ selected_device=""
 airplay_name=""
 disable_wifi_pm=false
 
+# Spotify Connect configuration
+install_spotify=false
+spotify_name=""
+spotify_bitrate="320"
+SPOTIFY_ZEROCONF_PORT="5354"
+
 # --- Cleanup Handler ---
 cleanup() {
     local exit_code=$?
@@ -46,6 +53,7 @@ cleanup() {
         # Stop services if they were started
         sudo systemctl stop shairport-sync 2>/dev/null || true
         sudo systemctl stop nqptp 2>/dev/null || true
+        sudo systemctl stop raspotify 2>/dev/null || true
 
         # Restore backups if they exist
         if [ -d "$BACKUP_DIR" ]; then
@@ -474,6 +482,104 @@ configure_wifi() {
     echo
 }
 
+# --- Spotify Connect Configuration Prompt ---
+configure_spotify() {
+    echo
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cecho "yellow" "   Step 4: Spotify Connect (optional)"
+    cecho "yellow" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    cecho "cyan" "⏸  PLEASE RESPOND TO THIS PROMPT ⏸"
+    echo
+
+    cecho "blue" "Spotify Connect lets you stream from the Spotify app to this Pi."
+    cecho "blue" "It is installed via the raspotify package (requires Spotify Premium)"
+    cecho "blue" "and coexists with AirPlay: only one source plays at a time."
+    echo
+    cecho "green" ">>> "
+    read -p "Install Spotify Connect as well? (Y/n): " spotify_choice || true
+
+    if [[ -z "$spotify_choice" || "$spotify_choice" =~ ^[Yy]$ ]]; then
+        install_spotify=true
+        echo
+        read -p "Spotify device name (Enter for '$airplay_name'): " spotify_name || true
+        [ -z "$spotify_name" ] && spotify_name="$airplay_name"
+        spotify_name=$(echo "$spotify_name" | sed 's/[^a-zA-Z0-9 _-]//g')
+        cecho "green" "✓ Spotify Connect will be installed as '$spotify_name'"
+    else
+        install_spotify=false
+        cecho "yellow" "⚠ Spotify Connect will NOT be installed"
+    fi
+    echo
+}
+
+# --- Spotify Connect Installation (raspotify) ---
+install_spotify_connect() {
+    [ "$install_spotify" != true ] && return 0
+
+    cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cecho "blue" "   Installing Spotify Connect (raspotify)..."
+    cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log "Setting up raspotify..."
+
+    # Add raspotify apt repo if not already configured
+    if [ ! -f /etc/apt/sources.list.d/raspotify.list ]; then
+        cecho "yellow" "Adding raspotify apt repository..."
+        if ! curl -fsSL https://dtcooper.github.io/raspotify/key.asc \
+                | sudo tee /usr/share/keyrings/raspotify_key.asc > /dev/null; then
+            cecho "red" "❌ Failed to fetch raspotify repository key"
+            cecho "yellow" "   Skipping Spotify Connect installation, continuing..."
+            install_spotify=false
+            return 0
+        fi
+        sudo chmod 644 /usr/share/keyrings/raspotify_key.asc
+        echo 'deb [signed-by=/usr/share/keyrings/raspotify_key.asc] https://dtcooper.github.io/raspotify raspotify main' \
+            | sudo tee /etc/apt/sources.list.d/raspotify.list > /dev/null
+        sudo apt-get update -qq 2>&1 | tee -a "$LOG_FILE" || true
+    fi
+
+    log "Installing raspotify package..."
+    if ! sudo apt-get install -y raspotify 2>&1 | tee -a "$LOG_FILE"; then
+        cecho "red" "❌ Failed to install raspotify"
+        cecho "yellow" "   Skipping Spotify Connect installation, continuing..."
+        install_spotify=false
+        return 0
+    fi
+
+    # Configure raspotify via /etc/raspotify/conf
+    local raspotify_conf="/etc/raspotify/conf"
+    if [ ! -f "$raspotify_conf" ]; then
+        cecho "yellow" "⚠ $raspotify_conf not found after install — skipping config"
+        return 0
+    fi
+
+    log "Configuring raspotify: name='$spotify_name' device='$audio_device_plug'"
+    sudo cp "$raspotify_conf" "$BACKUP_DIR/raspotify.conf" 2>/dev/null || true
+
+    # Replace any prior managed block, then append our settings
+    sudo sed -i '/^# >>> airplay-installer >>>$/,/^# <<< airplay-installer <<<$/d' "$raspotify_conf"
+    sudo tee -a "$raspotify_conf" > /dev/null <<EOF
+# >>> airplay-installer >>>
+LIBRESPOT_NAME="$spotify_name"
+LIBRESPOT_DEVICE="$audio_device_plug"
+LIBRESPOT_BITRATE="$spotify_bitrate"
+LIBRESPOT_INITIAL_VOLUME="100"
+LIBRESPOT_ZEROCONF_PORT="$SPOTIFY_ZEROCONF_PORT"
+# <<< airplay-installer <<<
+EOF
+
+    sudo systemctl enable raspotify 2>&1 | tee -a "$LOG_FILE" || true
+    sudo systemctl restart raspotify 2>&1 | tee -a "$LOG_FILE" || true
+    sleep 3
+
+    if check_service "raspotify"; then
+        cecho "green" "✓ Spotify Connect (raspotify) is running as '$spotify_name'"
+    else
+        cecho "yellow" "⚠ raspotify service is not active — check 'journalctl -u raspotify'"
+    fi
+    echo
+}
+
 # --- Main Installation ---
 main() {
     # Initialize log file immediately
@@ -514,6 +620,7 @@ main() {
     select_audio_device
     get_airplay_name
     configure_wifi
+    configure_spotify
 
     # --- Confirmation ---
     echo
@@ -526,6 +633,11 @@ main() {
     cecho "yellow" "  🔊 Audio Output:        $audio_device_plug"
     cecho "yellow" "  🎚️  Volume Control:      ${mixer_control:-None (fixed volume)}"
     cecho "yellow" "  📡 Disable Wi-Fi PM:    $disable_wifi_pm"
+    if [ "$install_spotify" = true ]; then
+        cecho "yellow" "  🎧 Spotify Connect:     yes ($spotify_name)"
+    else
+        cecho "yellow" "  🎧 Spotify Connect:     no"
+    fi
     echo
     cecho "blue" "Installation will take 10-30 minutes depending on your Pi model."
     cecho "blue" "(Pi Zero 2 will be slower, Pi 4/5 will be faster)"
@@ -875,6 +987,9 @@ EOF
     fi
     echo
 
+    # --- Spotify Connect (optional) ---
+    install_spotify_connect
+
     # --- Wi-Fi Power Management Instructions ---
     if [ "$disable_wifi_pm" = true ]; then
         cecho "blue" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -914,6 +1029,11 @@ EOF
         sudo ufw allow 320/udp comment 'NQPTP PTP' 2>&1 | tee -a "$LOG_FILE"
         # AirPlay ports
         sudo ufw allow 7000/tcp comment 'AirPlay' 2>&1 | tee -a "$LOG_FILE"
+
+        # Spotify Connect (librespot zeroconf) port if installed
+        if [ "$install_spotify" = true ]; then
+            sudo ufw allow "$SPOTIFY_ZEROCONF_PORT"/tcp comment 'librespot/Spotify Connect' 2>&1 | tee -a "$LOG_FILE"
+        fi
 
         cecho "green" "✓ Firewall rules added"
         echo
@@ -971,6 +1091,9 @@ EOF
     cecho "yellow" "  📱 Device Name:  $airplay_name"
     cecho "yellow" "  🔊 Audio Output: $audio_device_plug"
     cecho "yellow" "  🎚️  Volume:       ${mixer_control:-Fixed (no hardware control)}"
+    if [ "$install_spotify" = true ]; then
+        cecho "yellow" "  🎧 Spotify Connect: $spotify_name (Premium account required)"
+    fi
     echo
     cecho "blue" "┌─────────────────────────────────────────────────────┐"
     cecho "blue" "│ How to use:                                         │"

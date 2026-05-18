@@ -50,6 +50,9 @@ cecho "yellow" "  • /etc/shairport-sync.conf and sample"
 cecho "yellow" "  • systemd services (shairport-sync, nqptp)"
 cecho "yellow" "  • shairport-sync user and group"
 cecho "yellow" "  • UFW firewall rules for AirPlay (5353/udp, 319/udp, 320/udp, 7000/tcp)"
+if dpkg -l raspotify 2>/dev/null | grep -q '^ii'; then
+    cecho "yellow" "  • raspotify (Spotify Connect) package + apt repo"
+fi
 echo
 cecho "blue" "APT build dependencies (libsoxr-dev, libplist-dev, ...) are NOT removed."
 cecho "blue" "Other software on your system may rely on them."
@@ -72,10 +75,24 @@ echo
 cecho "blue" "Stopping services..."
 sudo systemctl stop shairport-sync 2>/dev/null || true
 sudo systemctl stop nqptp 2>/dev/null || true
+sudo systemctl stop raspotify 2>/dev/null || true
 
 cecho "blue" "Disabling services..."
 sudo systemctl disable shairport-sync 2>/dev/null || true
 sudo systemctl disable nqptp 2>/dev/null || true
+sudo systemctl disable raspotify 2>/dev/null || true
+
+# --- Remove raspotify (Spotify Connect) ---
+if dpkg -l raspotify 2>/dev/null | grep -q '^ii'; then
+    cecho "blue" "Removing raspotify package..."
+    sudo cp /etc/raspotify/conf "$BACKUP_DIR/raspotify.conf" 2>/dev/null || true
+    sudo apt-get remove --purge -y raspotify 2>/dev/null || true
+fi
+if [ -f /etc/apt/sources.list.d/raspotify.list ]; then
+    cecho "blue" "Removing raspotify apt repository..."
+    sudo rm -f /etc/apt/sources.list.d/raspotify.list
+    sudo rm -f /usr/share/keyrings/raspotify_key.asc
+fi
 
 # --- Remove systemd service files ---
 cecho "blue" "Removing systemd service files..."
@@ -139,8 +156,12 @@ if [ -f /etc/shairport-sync.conf ]; then
     cecho "yellow" "⚠ /etc/shairport-sync.conf still present"
     failures=$((failures+1))
 fi
-if systemctl list-unit-files 2>/dev/null | grep -qE '^(shairport-sync|nqptp)\.service'; then
+if systemctl list-unit-files 2>/dev/null | grep -qE '^(shairport-sync|nqptp|raspotify)\.service'; then
     cecho "yellow" "⚠ Some systemd unit files are still registered"
+    failures=$((failures+1))
+fi
+if dpkg -l raspotify 2>/dev/null | grep -q '^ii'; then
+    cecho "yellow" "⚠ raspotify package still installed"
     failures=$((failures+1))
 fi
 
