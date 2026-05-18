@@ -3,7 +3,8 @@
 # ===================================================================================
 # Shairport-Sync AirPlay 2 ROBUST Installer - ENHANCED VERSION 3.0
 #
-# Tailored for: Raspberry Pi (Zero 2/3/4/5) with USB DAC
+# Tailored for: Raspberry Pi (Zero 2/3/4/5) with USB DAC, audio HAT
+#               or built-in audio (3.5mm jack / HDMI)
 # Version: 3.0 - Production Ready
 # Features:
 #   - Comprehensive error handling with rollback capability
@@ -299,60 +300,55 @@ select_audio_device() {
 
     if [ -z "$all_cards" ]; then
         cecho "red" "❌ No audio devices detected at all!"
-        cecho "yellow" "   Make sure your USB DAC is properly connected."
-        cecho "yellow" "   Try: lsusb (to check if USB device is recognized)"
+        cecho "yellow" "   Make sure your audio output (USB DAC, HAT or built-in) is enabled."
+        cecho "yellow" "   Try: lsusb (to check if a USB device is recognized)"
+        cecho "yellow" "   Or:  sudo raspi-config (to enable built-in audio)"
         exit 1
     fi
 
-    # Show all detected devices
-    cecho "green" "Found these audio devices:"
-    echo "$all_cards" | nl -w2 -s'. '
-    echo
+    # Build the full list of available devices (built-in audio included)
+    mapfile -t all_devices < <(echo "$all_cards")
 
-    # Filter out built-in audio (bcm2835, Headphones, vc4-hdmi)
-    mapfile -t external_devices < <(echo "$all_cards" | grep -iv 'bcm2835\|Headphones\|vc4-hdmi' || true)
-
-    if [ ${#external_devices[@]} -eq 0 ]; then
-        cecho "yellow" "⚠ No external USB DAC detected!"
-        cecho "yellow" "   Only built-in audio found."
-        echo
-        read -p "Do you want to use built-in audio? (y/N): " use_builtin || true
-
-        if [[ "$use_builtin" =~ ^[Yy]$ ]]; then
-            mapfile -t external_devices < <(echo "$all_cards")
+    # Mark built-in devices so the user can recognise them in the menu
+    local device_labels=()
+    local i
+    for i in "${!all_devices[@]}"; do
+        local label="${all_devices[$i]}"
+        if echo "$label" | grep -qi 'bcm2835\|Headphones\|vc4-hdmi'; then
+            label="$label  [built-in]"
         else
-            cecho "yellow" "   Please:"
-            cecho "yellow" "   1. Connect your USB DAC"
-            cecho "yellow" "   2. Wait 5 seconds"
-            cecho "yellow" "   3. Run this script again"
-            exit 1
+            label="$label  [external/DAC]"
         fi
-    fi
+        device_labels+=("$label")
+    done
 
-    # Auto-select if only one device
-    if [ ${#external_devices[@]} -eq 1 ]; then
+    # Auto-select if only one device is available
+    if [ ${#all_devices[@]} -eq 1 ]; then
         cecho "green" "✓ Found one audio device, auto-selecting:"
-        cecho "magenta" "  → ${external_devices[0]}"
-        selected_device="${external_devices[0]}"
+        cecho "magenta" "  → ${device_labels[0]}"
+        selected_device="${all_devices[0]}"
     else
-        # Multiple devices - let user choose
-        cecho "yellow" "Found ${#external_devices[@]} audio devices:"
-        for i in "${!external_devices[@]}"; do
-            echo "  [$i] ${external_devices[$i]}"
+        cecho "yellow" "Found ${#all_devices[@]} audio devices:"
+        for i in "${!device_labels[@]}"; do
+            echo "  [$i] ${device_labels[$i]}"
         done
+        echo
+        cecho "blue" "You can select either a USB DAC / HAT or the Raspberry Pi's built-in audio"
+        cecho "blue" "(3.5mm jack / HDMI). Pick the one connected to your speakers/amplifier."
         echo
 
         local device_choice
         while true; do
-            read -p "Enter the number [0-$((${#external_devices[@]}-1))]: " device_choice || true
+            read -p "Enter the number [0-$((${#all_devices[@]}-1))]: " device_choice || true
 
-            if [[ "$device_choice" =~ ^[0-9]+$ ]] && [ "$device_choice" -lt "${#external_devices[@]}" ]; then
+            if [[ "$device_choice" =~ ^[0-9]+$ ]] && [ "$device_choice" -lt "${#all_devices[@]}" ]; then
                 break
             fi
             cecho "red" "Invalid selection. Please try again."
         done
 
-        selected_device="${external_devices[$device_choice]}"
+        selected_device="${all_devices[$device_choice]}"
+        cecho "green" "✓ Selected: ${device_labels[$device_choice]}"
     fi
 
     # Extract card and device numbers more reliably
@@ -486,7 +482,7 @@ main() {
     clear
     cecho "green" "╔═════════════════════════════════════════════════════╗"
     cecho "green" "║                                                     ║"
-    cecho "green" "║     AirPlay 2 Installer for Raspberry Pi + DAC     ║"
+    cecho "green" "║       AirPlay 2 Installer for Raspberry Pi          ║"
     cecho "green" "║                  Version $SCRIPT_VERSION                        ║"
     cecho "green" "║                                                     ║"
     cecho "green" "╚═════════════════════════════════════════════════════╝"
