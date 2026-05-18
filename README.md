@@ -1,83 +1,172 @@
 # RaspberryPi-AirPlay-Installer 📻
 
-Turn any Raspberry Pi (Zero 2 W, 3, 4, 5) into a modern, high-quality AirPlay 2 receiver in just 5 minutes. This project uses a set of robust scripts to automate the entire installation process, making it incredibly easy to revive your old home theater or favorite speakers.
+Turn any Raspberry Pi (Zero 2 W, 3, 4, 5) into a modern, high-quality **AirPlay 2** receiver in just a few minutes. This project automates the entire build of [Shairport-Sync](https://github.com/mikebrady/shairport-sync) + [NQPTP](https://github.com/mikebrady/nqptp) with a set of robust, interactive scripts.
 
-> **If you find this project helpful, please consider giving it a ⭐ star on GitHub!** It helps others discover it and shows your appreciation for the work. Also, please like the video and **[subscribe to the channel](https://www.youtube.com/@ravis1ngh)**. It helps us create more content like this.
-
-The goal of this project was to simplify the manual installation process, making it accessible to everyone.
-
-| The Old, Manual Way (40+ Minutes) | The New, Automated Way (5 Minutes!) |
-| :---: | :---: |
-| [![Manual AirPlay 2 Pi Setup](https://img.youtube.com/vi/WeibcfMywXU/0.jpg)](https://www.youtube.com/watch?v=WeibcfMywXU) | **[Link to New Video Coming Soon!]** <br> *(Placeholder for your new, shorter video)* |
+> **If you find this project helpful, please consider giving it a ⭐ star on GitHub!**
 
 ---
 
-### ✨ Features
+## ✨ Features
 
-* **🚀 5-Minute Setup:** Go from a fresh Raspberry Pi OS to a working AirPlay 2 speaker in minutes.
-* **🤖 Fully Automated:** The script handles system updates, dependency installation, compiling, and configuration.
-* **✅ Smart Pre-Checks:** A pre-installation script verifies your system is ready, checking for internet, disk space, and audio devices to prevent errors.
-* **🔌 USB DAC Auto-Detection:** Intelligently finds your external USB sound card and lets you choose the correct one if you have multiple.
-* **⚙️ Optimized for Performance:** Automatically configures settings for the best audio quality and prompts to disable Wi-Fi power saving to prevent dropouts.
-* **🛠️ Robust & Reliable:** Includes error handling and detailed logging for easy troubleshooting.
-
----
-
-### Hardware Requirements
-
-* **Raspberry Pi:** A Pi Zero 2 W, 3, 4, or 5 is recommended.
-* **MicroSD Card:** A quality card with at least 8GB.
-* **Power Supply:** The official power supply for your Pi model.
-* **Audio Output:**
-    * For Pi Zero: An **OTG cable** and a **USB DAC** with a 3.5mm output.
-    * For Pi 3/4/5: The built-in 3.5mm jack or an optional USB DAC.
+* **🚀 Fast setup** — From a fresh Raspberry Pi OS to a working AirPlay 2 speaker in minutes.
+* **🤖 Fully automated** — Handles system update, dependencies, compiling and configuration.
+* **✅ Smart pre-flight checks** — Validates internet, disk space, memory and detected hardware before changing anything.
+* **🔊 Flexible audio** — Works with **USB DAC**, **audio HAT**, or the **Raspberry Pi's built-in audio** (3.5mm jack / HDMI). All detected devices are listed and labelled `[built-in]` / `[external/DAC]`.
+* **🛠️ Idempotent management** — Dedicated scripts to **modify** or **uninstall** an existing installation without reinstalling from scratch.
+* **🎚️ Volume control aware** — Auto-selects the best ALSA mixer (`PCM`, `Master`, `Speaker`, ...) and falls back to software volume if no hardware mixer is available.
+* **🔁 Rollback on failure** — Backs up configuration files and cleans up on failed installs.
+* **📋 Detailed logging** — Every installation writes a timestamped log under `/tmp/airplay_install_*.log`.
 
 ---
 
-###  🚀 Quick Start Installation
+## 🧰 Hardware Requirements
 
-After installing Raspberry Pi OS Lite and connecting to your Pi via SSH, run this single command. It will download the pre-check script and, if successful, automatically launch the main installer.
+| Component | Recommended |
+| --- | --- |
+| Raspberry Pi | Zero 2 W, 3, 4 or 5 |
+| MicroSD card | Quality card, ≥ 8 GB |
+| Power supply | Official PSU for your Pi |
+| Audio output | USB DAC, audio HAT **or** built-in 3.5mm / HDMI |
+
+> The older Pi 1 / Pi Zero W are not officially supported — they typically lack the CPU headroom for AirPlay 2.
+
+---
+
+## 📦 What's in the box
+
+All scripts live under `RaspberryPi-AirPlay-Installer-Scripts/`:
+
+| Script | Purpose |
+| --- | --- |
+| `pre_check_airplay_on_pi.sh` | Read-only system check before installing. |
+| `install_airplay_v3.sh` | Main installer: deps, build, service, config. |
+| `modify_airplay.sh` | Edit an existing install (name, audio device, mixer, volume...). |
+| `uninstall_airplay.sh` | Cleanly remove Shairport-Sync, NQPTP, services and config. |
+| `airplay_manager.sh` | Unified menu that dispatches to the three scripts above. |
+
+---
+
+## 🚀 Quick Start
+
+After flashing **Raspberry Pi OS** (Lite is fine) and connecting via SSH, you have two options.
+
+### Option A — Run from this repo (recommended for development)
+
+```bash
+git clone https://github.com/Techposts/RaspberryPi-AirPlay-Installer.git
+cd RaspberryPi-AirPlay-Installer/RaspberryPi-AirPlay-Installer-Scripts
+bash airplay_manager.sh         # unified menu
+```
+
+The menu lets you install, modify or uninstall, and tail live service logs.
+
+### Option B — One-shot install from upstream
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/Techposts/RaspberryPi-AirPlay-Installer/main/RaspberryPi-AirPlay-Installer-Scripts/pre_check_airplay_on_pi.sh | bash
-curl -sSl https://raw.githubusercontent.com/Techposts/RaspberryPi-AirPlay-Installer/main/RaspberryPi-AirPlay-Installer-Scripts/install_airplay_v3.sh | bash
+curl -sSL https://raw.githubusercontent.com/Techposts/RaspberryPi-AirPlay-Installer/main/RaspberryPi-AirPlay-Installer-Scripts/install_airplay_v3.sh | bash
 ```
 
-The script is interactive and will guide you through the process. Once finished, it will reboot, and your AirPlay 2 receiver will be ready to use!
+The installer is interactive: it will ask you to pick the audio device, give your AirPlay endpoint a name and decide on Wi-Fi power management. When it's done, the Pi will offer to reboot and your speaker is ready.
+
+> **Do not run any of these scripts with `sudo`.** They invoke `sudo` only where needed and will refuse to start as `root`.
 
 ---
 
-### ✅ The Final Result
+## 🎛️ Modifying an existing installation
 
-When you're done, your setup will be seamless. Your Raspberry Pi will appear as a native AirPlay device on your network, ready to stream from any Apple device.
+Need to rename the speaker, change the audio output or adjust volume limits? You don't have to reinstall.
 
-| Mobile Screenshot | Hardware Setup |
-| :---: | :---: |
-| **** <br> *Your new device, ready to connect.* | **** <br> *The simple and clean hardware setup.* |
+```bash
+bash modify_airplay.sh
+```
 
----
+The interactive menu provides:
 
-### How It Works
+1. Change AirPlay name
+2. Change audio output device (USB DAC / HAT / built-in)
+3. Change mixer / hardware volume control (or disable it)
+4. Change volume limits (`volume_max_db`, `default_airplay_volume`)
+5. Test audio output
+6. View current configuration
+7. Show service status
+8. Restart service
+9. Edit `/etc/shairport-sync.conf` manually (+ auto restart)
 
-This project uses a two-script system for a safe and reliable installation:
-
-1.  **`pre_check_airplay_on_pi.sh`:** A non-invasive script that checks your system for common issues without making any changes. If all checks pass, it automatically downloads and runs the main installer.
-2.  **`install_airplay_v3.sh`:** The powerful main installer that performs all the required actions to build and configure the AirPlay 2 software (`Shairport-Sync` and `nqptp`).
-
----
-
-### ❤️ Support the Project
-
-If this installer helped you bring your old speakers back to life, please consider showing your support!
-
-* **⭐ Star the Repository:** Starring this project on GitHub is a great way to show your appreciation and helps others find it.
-* **👍 Like & Subscribe:** If you came from the video tutorial, please **like the video** and **[subscribe to the channel](https://www.youtube.com/@ravis1ngh)**. It helps us create more content like this.
+All changes are written to `/etc/shairport-sync.conf` and the service is restarted automatically.
 
 ---
 
+## 🧹 Uninstalling
 
-### License
+```bash
+bash uninstall_airplay.sh
+```
+
+Removes:
+
+* `shairport-sync` and `nqptp` binaries
+* `/etc/shairport-sync.conf` and sample
+* systemd units (`shairport-sync.service`, `nqptp.service`)
+* The `shairport-sync` user and group
+* UFW firewall rules added during install (`5353/udp`, `319/udp`, `320/udp`, `7000/tcp`)
+
+A backup of the current config is saved under `/tmp/airplay_uninstall_backup_<timestamp>/` before anything is deleted.
+
+> APT build dependencies (`libsoxr-dev`, `libplist-dev`, ...) are intentionally **not** removed — other software on your system may rely on them. The uninstaller prints the `apt-get` command to remove them manually if you want a fully clean state.
+
+---
+
+## 🐛 Troubleshooting
+
+**`configure: error: plistutil can not be found`** (Debian 13 "Trixie" / Pi OS Bookworm successor)
+
+On recent releases the `plistutil` binary moved from `libplist-dev` to a separate package `libplist-utils`. The installer in this repo already pulls it in. If you hit this on an older copy:
+
+```bash
+sudo apt-get install -y libplist-utils
+bash install_airplay_v3.sh
+```
+
+**The Pi doesn't appear in the AirPlay picker**
+
+* Make sure iPhone/iPad and Pi are on the **same Wi-Fi network and same subnet**.
+* Check that `avahi-daemon` is running: `systemctl status avahi-daemon`.
+* Tail the service: `sudo journalctl -u shairport-sync -f`.
+
+**Audio stutters / drops out**
+
+* Disable Wi-Fi power management: `sudo raspi-config` → Performance → Wireless LAN → Power Management → Disable.
+* On Pi Zero 2, prefer a wired ethernet adapter or stay close to the access point.
+
+**Useful one-liners**
+
+```bash
+sudo systemctl status shairport-sync       # service health
+sudo journalctl -u shairport-sync -f       # live logs
+sudo nano /etc/shairport-sync.conf         # manual edit (then restart)
+sudo systemctl restart shairport-sync
+```
+
+---
+
+## ⚙️ How it works
+
+1. **`pre_check_airplay_on_pi.sh`** — non-invasive system check (no changes made).
+2. **`install_airplay_v3.sh`** — installs build deps, clones and compiles `nqptp` and `shairport-sync` with `--with-airplay-2`, writes `/etc/shairport-sync.conf`, creates a systemd service and a dedicated user, configures UFW if active.
+3. **`modify_airplay.sh`** — edits `/etc/shairport-sync.conf` in place via targeted `sed` rules and restarts the service.
+4. **`uninstall_airplay.sh`** — reverses everything the installer did, in dependency-safe order.
+5. **`airplay_manager.sh`** — thin wrapper that picks the right script based on what's currently installed.
+
+---
+
+## 🙏 Credits
+
+* [Mike Brady](https://github.com/mikebrady) — author of Shairport-Sync and NQPTP, the upstream projects that make all of this possible.
+* Original installer scripts: [Techposts/RaspberryPi-AirPlay-Installer](https://github.com/Techposts/RaspberryPi-AirPlay-Installer).
+
+---
+
+## 📜 License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
-
-

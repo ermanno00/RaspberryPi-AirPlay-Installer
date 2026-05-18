@@ -576,7 +576,7 @@ main() {
         build-essential git autoconf automake libtool pkg-config
         libpopt-dev libconfig-dev libasound2-dev
         avahi-daemon libavahi-client-dev libssl-dev
-        libsoxr-dev libplist-dev libsodium-dev
+        libsoxr-dev libplist-dev libplist-utils libsodium-dev
         libavutil-dev libavcodec-dev libavformat-dev
         uuid-dev libgcrypt20-dev xxd alsa-utils
     )
