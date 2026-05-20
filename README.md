@@ -55,6 +55,7 @@ After flashing **Raspberry Pi OS** (Lite is fine) and connecting via SSH, you ha
 
 ```bash
 git clone https://github.com/Techposts/RaspberryPi-AirPlay-Installer.git
+or git clone https://github.com/ermanno00/RaspberryPi-AirPlay-Installer.git
 cd RaspberryPi-AirPlay-Installer/RaspberryPi-AirPlay-Installer-Scripts
 bash airplay_manager.sh         # unified menu
 ```
