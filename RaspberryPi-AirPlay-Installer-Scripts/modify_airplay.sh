@@ -411,27 +411,21 @@ action_install_spotify() {
         sudo apt-get update -qq || true
     fi
 
-    # Mask raspotify before install so the deb's post-install auto-start cannot
-    # advertise the default "raspotify (<hostname>)" name over zeroconf — the
-    # Spotify app caches the first name it sees. We unmask after writing ours.
-    sudo systemctl mask raspotify 2>/dev/null || true
-
     cecho "blue" "Installing raspotify..."
     if ! sudo apt-get install -y raspotify; then
         cecho "red" "❌ Failed to install raspotify."
-        sudo systemctl unmask raspotify 2>/dev/null || true
         return
     fi
 
     if [ ! -f "$RASPOTIFY_CONF" ]; then
         cecho "red" "❌ $RASPOTIFY_CONF not found after install."
-        sudo systemctl unmask raspotify 2>/dev/null || true
         return
     fi
 
     write_spotify_managed_block "$spotify_name" "$cur_dev"
     cecho "green" "✓ raspotify configured: '$spotify_name' on $cur_dev"
 
+    # Defensive unmask in case a previous installer run left it masked.
     sudo systemctl unmask raspotify 2>/dev/null || true
     sudo systemctl enable raspotify >/dev/null 2>&1 || true
     restart_spotify
