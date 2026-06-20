@@ -302,6 +302,70 @@ action_change_mixer() {
     fi
 }
 
+install_max_volume_service() {
+    # Args: card_number. Sets every playback control to 100% now and installs a
+    # boot-time oneshot that re-applies it on every reboot (alsactl restore is
+    # unreliable on some Pi OS images, so the desktop volume can come up ~50%).
+    local card_number="$1"
+    [ -z "$card_number" ] && { cecho "red" "No card number."; return 1; }
+
+    local ctl
+    while IFS= read -r ctl; do
+        [ -z "$ctl" ] && continue
+        amixer -c "$card_number" set "$ctl" 100% unmute > /dev/null 2>&1 || true
+    done < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
+    sudo alsactl store > /dev/null 2>&1 || true
+
+    local amixer_bin exec_lines=""
+    amixer_bin="$(command -v amixer || echo /usr/bin/amixer)"
+    while IFS= read -r ctl; do
+        [ -z "$ctl" ] && continue
+        exec_lines+="ExecStart=-$amixer_bin -c $card_number set \"$ctl\" 100% unmute"$'\n'
+    done < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
+    if [ -z "$exec_lines" ]; then
+        cecho "yellow" "⚠ No mixer controls on card $card_number — nothing to do."
+        return 1
+    fi
+
+    sudo tee /lib/systemd/system/airplay-volume.service > /dev/null <<EOF
+[Unit]
+Description=Set ALSA mixer to maximum volume for AirPlay
+After=sound.target alsa-restore.service
+Before=shairport-sync.service raspotify.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+${exec_lines}
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload 2>/dev/null || true
+    sudo systemctl enable airplay-volume.service >/dev/null 2>&1 || true
+    sudo systemctl start airplay-volume.service >/dev/null 2>&1 || true
+    return 0
+}
+
+action_max_volume() {
+    local cur_out card_number
+    cur_out=$(current_output_device)
+    if [ -z "$cur_out" ]; then
+        cecho "yellow" "No output_device configured yet. Change the audio device first."
+        return
+    fi
+    card_number=$(echo "$cur_out" | grep -oE '[0-9]+' | head -1)
+    if [ -z "$card_number" ]; then
+        cecho "red" "Could not parse card number from: $cur_out"
+        return
+    fi
+    cecho "blue" "Setting all controls on card $card_number to 100% and enabling boot service..."
+    if install_max_volume_service "$card_number"; then
+        cecho "green" "✓ Hardware volume set to maximum (now and on every boot)"
+        cecho "blue"  "  Controls on card $card_number:"
+        amixer -c "$card_number" sget "$(current_mixer)" 2>/dev/null | grep -E '\[[0-9]+%\]' | head -4 || true
+    fi
+}
+
 action_change_volume_limits() {
     cecho "blue" "Volume limits are expressed in dB (0 = max, negative attenuates)."
     cecho "blue" "Examples: volume_max_db = 0  |  -10 to cap max output"
@@ -520,6 +584,7 @@ main() {
         echo "   2) Change audio output device"
         echo "   3) Change mixer / hardware volume control"
         echo "   4) Change volume limits (volume_max_db, default_airplay_volume)"
+        echo "  15) Set hardware volume to MAX now + on every boot"
         echo "   5) Test audio output"
         echo "   6) View configuration"
         echo "   7) Show service status"
@@ -542,6 +607,7 @@ main() {
             2)  action_change_audio_device ;;
             3)  action_change_mixer ;;
             4)  action_change_volume_limits ;;
+            15) action_max_volume ;;
             5)  action_test_audio ;;
             6)  action_view_config ;;
             7)  action_service_status ;;

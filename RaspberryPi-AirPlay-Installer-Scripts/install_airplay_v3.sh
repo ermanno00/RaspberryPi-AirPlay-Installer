@@ -975,14 +975,34 @@ FALLBACK_EOF
             cecho "yellow" "⚠ Could not set mixer volume (may not be supported)"
         fi
 
+        # Bring EVERY playback control on the card up to 100%, not just the one
+        # shairport-sync uses. Many USB DACs expose several controls (PCM,
+        # Digital, Speaker...) and if any sits at ~50% the Pi's desktop volume
+        # indicator and the actual output stay below maximum.
+        local ctl
+        while IFS= read -r ctl; do
+            [ -z "$ctl" ] && continue
+            amixer -c "$card_number" set "$ctl" 100% unmute > /dev/null 2>&1 || true
+        done < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
+        sudo alsactl store > /dev/null 2>&1 || true
+
         # Persist max volume across reboots.
         # `alsactl store` (above) saves the state to asound.state and is normally
         # restored at boot by alsa-restore.service, but on several Pi OS images the
         # mixer comes up around 50% regardless (the saved state isn't restored for
         # the selected card, or another component lowers it). We install a tiny
-        # boot-time oneshot that forces the mixer to 100% on every boot, ordered
-        # before shairport-sync so playback always starts at full hardware volume.
+        # boot-time oneshot that forces every control to 100% on every boot,
+        # ordered before shairport-sync so playback starts at full hardware volume.
         cecho "blue" "Installing boot-time max-volume service..."
+        local amixer_bin exec_lines=""
+        amixer_bin="$(command -v amixer || echo /usr/bin/amixer)"
+        while IFS= read -r ctl; do
+            [ -z "$ctl" ] && continue
+            exec_lines+="ExecStart=-$amixer_bin -c $card_number set \"$ctl\" 100% unmute"$'\n'
+        done < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
+        # Fallback to the chosen control if enumeration produced nothing.
+        [ -z "$exec_lines" ] && exec_lines="ExecStart=-$amixer_bin -c $card_number set \"$mixer_control\" 100% unmute"$'\n'
+
         sudo tee /lib/systemd/system/airplay-volume.service > /dev/null <<EOF
 [Unit]
 Description=Set ALSA mixer to maximum volume for AirPlay
@@ -992,8 +1012,7 @@ Before=shairport-sync.service raspotify.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/amixer -c $card_number set "$mixer_control" 100% unmute
-
+${exec_lines}
 [Install]
 WantedBy=multi-user.target
 EOF
