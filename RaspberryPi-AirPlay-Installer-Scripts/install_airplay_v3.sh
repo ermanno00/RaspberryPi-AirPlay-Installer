@@ -173,6 +173,74 @@ safe_cd() {
     }
 }
 
+# Pin the card's hardware mixer to 100% and keep it there across reboots.
+# We drive AirPlay and Spotify with SOFTWARE volume (so each source has its own
+# independent volume), which means the DAC's hardware mixer must stay at maximum
+# as a common ceiling. How we keep it there depends on the audio stack:
+#   - PipeWire/WirePlumber (Pi OS Desktop, Debian 12/13): WirePlumber owns the
+#     ALSA mixer and restores its OWN saved level at session start, overriding
+#     anything an early boot service sets. The reliable way is to set it through
+#     PipeWire (wpctl), which WirePlumber then persists across reboots.
+#   - Plain ALSA (Pi OS Lite): no session manager, so a boot-time oneshot that
+#     forces every control to 100% on each boot is enough.
+pin_hardware_volume_max() {
+    local card="$1"
+    [ -z "$card" ] && return 0
+
+    # Always raise every control now and snapshot the ALSA state.
+    local ctl
+    while IFS= read -r ctl; do
+        [ -z "$ctl" ] && continue
+        amixer -c "$card" set "$ctl" 100% unmute > /dev/null 2>&1 || true
+    done < <(amixer -c "$card" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
+    sudo alsactl store > /dev/null 2>&1 || true
+
+    if command_exists wpctl; then
+        cecho "blue" "PipeWire detected — setting default sink to 100% (persisted by WirePlumber)..."
+        wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.0 >/dev/null 2>&1 || true
+        # An amixer boot service is pointless on PipeWire (runs too early, gets
+        # overridden) — remove any left over from an older install.
+        if [ -f /lib/systemd/system/airplay-volume.service ]; then
+            sudo systemctl disable airplay-volume.service >/dev/null 2>&1 || true
+            sudo rm -f /lib/systemd/system/airplay-volume.service
+            sudo systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        cecho "green" "✓ Hardware volume pinned to maximum via PipeWire"
+        return 0
+    fi
+
+    # Plain ALSA: install a boot-time oneshot that forces 100% on every boot.
+    cecho "blue" "Installing boot-time max-volume service..."
+    local amixer_bin exec_lines=""
+    amixer_bin="$(command -v amixer || echo /usr/bin/amixer)"
+    while IFS= read -r ctl; do
+        [ -z "$ctl" ] && continue
+        exec_lines+="ExecStart=-$amixer_bin -c $card set \"$ctl\" 100% unmute"$'\n'
+    done < <(amixer -c "$card" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
+    [ -z "$exec_lines" ] && { cecho "yellow" "⚠ No mixer controls on card $card."; return 0; }
+
+    sudo tee /lib/systemd/system/airplay-volume.service > /dev/null <<EOF
+[Unit]
+Description=Set ALSA mixer to maximum volume for AirPlay
+After=sound.target alsa-restore.service
+Before=shairport-sync.service raspotify.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+${exec_lines}
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload >/dev/null 2>&1 || true
+    if sudo systemctl enable airplay-volume.service >/dev/null 2>&1; then
+        sudo systemctl start airplay-volume.service >/dev/null 2>&1 || true
+        cecho "green" "✓ Max volume will be re-applied on every boot"
+    else
+        cecho "yellow" "⚠ Could not enable boot-time volume service"
+    fi
+}
+
 # --- Pre-flight Checks ---
 pre_flight_checks() {
     cecho "blue" "═══════════════════════════════════════"
@@ -680,7 +748,7 @@ main() {
     echo
     cecho "yellow" "  📱 AirPlay Name:        $airplay_name"
     cecho "yellow" "  🔊 Audio Output:        $audio_device_plug"
-    cecho "yellow" "  🎚️  Volume Control:      ${mixer_control:-None (fixed volume)}"
+    cecho "yellow" "  🎚️  Volume Control:      Software (independent AirPlay/Spotify, DAC pinned 100%)"
     cecho "yellow" "  📡 Disable Wi-Fi PM:    $disable_wifi_pm"
     if [ "$install_spotify" = true ]; then
         cecho "yellow" "  🎧 Spotify Connect:     yes ($spotify_name)"
@@ -936,24 +1004,27 @@ FALLBACK_EOF
     sudo sed -i "s|^[[:space:]]*output_device = .*|        output_device = \"$audio_device_plug\";|" /etc/shairport-sync.conf
     sudo sed -i "s|^//[[:space:]]*output_device = .*|        output_device = \"$audio_device_plug\";|" /etc/shairport-sync.conf
 
-    # Set mixer control if available
-    if [ -n "$mixer_control" ]; then
-        log "Configuring mixer control: $mixer_control on hw:$card_number"
-        sudo sed -i "s|^//[[:space:]]*mixer_control_name = .*|        mixer_control_name = \"$mixer_control\";|" /etc/shairport-sync.conf
-        sudo sed -i "s|^[[:space:]]*mixer_control_name = .*|        mixer_control_name = \"$mixer_control\";|" /etc/shairport-sync.conf
-        # Also set mixer_device if needed (usually commented out by default)
-        sudo sed -i "s|^//[[:space:]]*mixer_device = .*|        mixer_device = \"hw:$card_number\";|" /etc/shairport-sync.conf
-        sudo sed -i "s|^[[:space:]]*mixer_device = .*|        mixer_device = \"hw:$card_number\";|" /etc/shairport-sync.conf
-    fi
+    # Use SOFTWARE volume — do NOT bind a hardware mixer.
+    # If shairport drives the hardware mixer (mixer_control_name), the AirPlay
+    # volume from your phone/Mac moves the shared DAC control and LEAVES it there
+    # when you disconnect, so a later Spotify session inherits that low ceiling.
+    # With software volume, AirPlay and Spotify each attenuate their own stream
+    # and the hardware PCM stays pinned at 100% (see pin_hardware_volume_max).
+    # Force these to commented regardless of any previous run's state.
+    log "Using software volume (no hardware mixer binding)"
+    sudo sed -i -E "s|^[[:space:]]*(//[[:space:]]*)?mixer_control_name[[:space:]]*=.*|//        mixer_control_name = \"PCM\";|" /etc/shairport-sync.conf
+    sudo sed -i -E "s|^[[:space:]]*(//[[:space:]]*)?mixer_device[[:space:]]*=.*|//        mixer_device = \"default\";|" /etc/shairport-sync.conf
 
-    # Set output format
+    # Set output format. S32 gives software volume the most headroom so low
+    # volumes don't lose audible detail (plughw converts to the DAC's real depth).
     sudo sed -i "s|^//[[:space:]]*output_rate = .*|        output_rate = \"auto\";|" /etc/shairport-sync.conf
     sudo sed -i "s|^[[:space:]]*output_rate = .*|        output_rate = \"auto\";|" /etc/shairport-sync.conf
-    sudo sed -i "s|^//[[:space:]]*output_format = .*|        output_format = \"S16\";|" /etc/shairport-sync.conf
-    sudo sed -i "s|^[[:space:]]*output_format = .*|        output_format = \"S16\";|" /etc/shairport-sync.conf
+    sudo sed -i "s|^//[[:space:]]*output_format = .*|        output_format = \"S32\";|" /etc/shairport-sync.conf
+    sudo sed -i "s|^[[:space:]]*output_format = .*|        output_format = \"S32\";|" /etc/shairport-sync.conf
 
-    # Set volume settings
-    sudo sed -i "s|^//[[:space:]]*volume_max_db = .*|        volume_max_db = 4.0;|" /etc/shairport-sync.conf
+    # Set volume settings. With software volume, volume_max_db = 0 means unity
+    # gain at the top of the dial (no digital amplification → no clipping).
+    sudo sed -i "s|^//[[:space:]]*volume_max_db = .*|        volume_max_db = 0.0;|" /etc/shairport-sync.conf
     sudo sed -i "s|^//[[:space:]]*default_airplay_volume = .*|        default_airplay_volume = -6.0;|" /etc/shairport-sync.conf
     sudo sed -i "s|^//[[:space:]]*high_volume_idle_timeout_in_minutes = .*|        high_volume_idle_timeout_in_minutes = 1;|" /etc/shairport-sync.conf
 
@@ -965,64 +1036,9 @@ FALLBACK_EOF
 
     cecho "green" "✓ Configuration file created and customized"
 
-    # Set mixer volume to maximum if available
-    if [ -n "$mixer_control" ]; then
-        cecho "blue" "Setting mixer volume to 100%..."
-        if amixer -c "$card_number" set "$mixer_control" 100% unmute > /dev/null 2>&1; then
-            sudo alsactl store > /dev/null 2>&1 || true
-            cecho "green" "✓ Mixer volume set to maximum"
-        else
-            cecho "yellow" "⚠ Could not set mixer volume (may not be supported)"
-        fi
-
-        # Bring EVERY playback control on the card up to 100%, not just the one
-        # shairport-sync uses. Many USB DACs expose several controls (PCM,
-        # Digital, Speaker...) and if any sits at ~50% the Pi's desktop volume
-        # indicator and the actual output stay below maximum.
-        local ctl
-        while IFS= read -r ctl; do
-            [ -z "$ctl" ] && continue
-            amixer -c "$card_number" set "$ctl" 100% unmute > /dev/null 2>&1 || true
-        done < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
-        sudo alsactl store > /dev/null 2>&1 || true
-
-        # Persist max volume across reboots.
-        # `alsactl store` (above) saves the state to asound.state and is normally
-        # restored at boot by alsa-restore.service, but on several Pi OS images the
-        # mixer comes up around 50% regardless (the saved state isn't restored for
-        # the selected card, or another component lowers it). We install a tiny
-        # boot-time oneshot that forces every control to 100% on every boot,
-        # ordered before shairport-sync so playback starts at full hardware volume.
-        cecho "blue" "Installing boot-time max-volume service..."
-        local amixer_bin exec_lines=""
-        amixer_bin="$(command -v amixer || echo /usr/bin/amixer)"
-        while IFS= read -r ctl; do
-            [ -z "$ctl" ] && continue
-            exec_lines+="ExecStart=-$amixer_bin -c $card_number set \"$ctl\" 100% unmute"$'\n'
-        done < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
-        # Fallback to the chosen control if enumeration produced nothing.
-        [ -z "$exec_lines" ] && exec_lines="ExecStart=-$amixer_bin -c $card_number set \"$mixer_control\" 100% unmute"$'\n'
-
-        sudo tee /lib/systemd/system/airplay-volume.service > /dev/null <<EOF
-[Unit]
-Description=Set ALSA mixer to maximum volume for AirPlay
-After=sound.target alsa-restore.service
-Before=shairport-sync.service raspotify.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-${exec_lines}
-[Install]
-WantedBy=multi-user.target
-EOF
-        sudo systemctl daemon-reload 2>&1 | tee -a "$LOG_FILE" || true
-        if sudo systemctl enable airplay-volume.service 2>&1 | tee -a "$LOG_FILE"; then
-            cecho "green" "✓ Max volume will be re-applied on every boot"
-        else
-            cecho "yellow" "⚠ Could not enable boot-time volume service"
-        fi
-    fi
+    # Pin the DAC hardware mixer to 100% (and keep it there) so the software
+    # volumes of AirPlay and Spotify both have full range. PipeWire-aware.
+    pin_hardware_volume_max "$card_number"
     echo
 
     # --- Create/Update Systemd Service ---
@@ -1191,7 +1207,7 @@ EOF
     echo
     cecho "yellow" "  📱 Device Name:  $airplay_name"
     cecho "yellow" "  🔊 Audio Output: $audio_device_plug"
-    cecho "yellow" "  🎚️  Volume:       ${mixer_control:-Fixed (no hardware control)}"
+    cecho "yellow" "  🎚️  Volume:       Software (independent AirPlay/Spotify, DAC pinned 100%)"
     if [ "$install_spotify" = true ]; then
         cecho "yellow" "  🎧 Spotify Connect: $spotify_name (Premium account required)"
     fi

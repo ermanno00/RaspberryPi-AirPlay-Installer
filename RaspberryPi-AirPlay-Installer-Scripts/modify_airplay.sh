@@ -302,10 +302,12 @@ action_change_mixer() {
     fi
 }
 
-install_max_volume_service() {
-    # Args: card_number. Sets every playback control to 100% now and installs a
-    # boot-time oneshot that re-applies it on every reboot (alsactl restore is
-    # unreliable on some Pi OS images, so the desktop volume can come up ~50%).
+pin_hardware_volume_max() {
+    # Args: card_number. Raise every control to 100% now, then keep it there.
+    #  - PipeWire (Desktop): WirePlumber owns the mixer and restores its own saved
+    #    level, so we set it via wpctl (which WirePlumber then persists) and drop
+    #    any stale amixer boot service.
+    #  - Plain ALSA (Lite): install a boot-time oneshot that forces 100% each boot.
     local card_number="$1"
     [ -z "$card_number" ] && { cecho "red" "No card number."; return 1; }
 
@@ -315,6 +317,17 @@ install_max_volume_service() {
         amixer -c "$card_number" set "$ctl" 100% unmute > /dev/null 2>&1 || true
     done < <(amixer -c "$card_number" scontrols 2>/dev/null | grep -oP "Simple mixer control '\K[^']+" || true)
     sudo alsactl store > /dev/null 2>&1 || true
+
+    if command -v wpctl >/dev/null 2>&1; then
+        cecho "blue" "PipeWire detected — setting default sink to 100% (persisted by WirePlumber)..."
+        wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.0 >/dev/null 2>&1 || true
+        if [ -f /lib/systemd/system/airplay-volume.service ]; then
+            sudo systemctl disable airplay-volume.service >/dev/null 2>&1 || true
+            sudo rm -f /lib/systemd/system/airplay-volume.service
+            sudo systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
 
     local amixer_bin exec_lines=""
     amixer_bin="$(command -v amixer || echo /usr/bin/amixer)"
@@ -346,6 +359,15 @@ EOF
     return 0
 }
 
+# Switch shairport-sync to SOFTWARE volume: unbind the hardware mixer so AirPlay
+# stops driving the shared DAC control, and give software volume full headroom.
+set_software_volume_config() {
+    sudo sed -i -E "s|^[[:space:]]*(//[[:space:]]*)?mixer_control_name[[:space:]]*=.*|//        mixer_control_name = \"PCM\";|" "$CONFIG_FILE"
+    sudo sed -i -E "s|^[[:space:]]*(//[[:space:]]*)?mixer_device[[:space:]]*=.*|//        mixer_device = \"default\";|" "$CONFIG_FILE"
+    sudo sed -i -E "s|^[[:space:]]*(//[[:space:]]*)?output_format[[:space:]]*=.*|        output_format = \"S32\";|" "$CONFIG_FILE"
+    sudo sed -i -E "s|^[[:space:]]*(//[[:space:]]*)?volume_max_db[[:space:]]*=.*|        volume_max_db = 0.0;|" "$CONFIG_FILE"
+}
+
 action_max_volume() {
     local cur_out card_number
     cur_out=$(current_output_device)
@@ -358,12 +380,20 @@ action_max_volume() {
         cecho "red" "Could not parse card number from: $cur_out"
         return
     fi
-    cecho "blue" "Setting all controls on card $card_number to 100% and enabling boot service..."
-    if install_max_volume_service "$card_number"; then
-        cecho "green" "✓ Hardware volume set to maximum (now and on every boot)"
-        cecho "blue"  "  Controls on card $card_number:"
-        amixer -c "$card_number" sget "$(current_mixer)" 2>/dev/null | grep -E '\[[0-9]+%\]' | head -4 || true
+
+    cecho "blue" "This sets up INDEPENDENT volumes for AirPlay and Spotify:"
+    cecho "blue" "  • shairport-sync switched to software volume (stops driving the DAC mixer)"
+    cecho "blue" "  • DAC hardware volume pinned at 100% (now and persisted across reboots)"
+    echo
+    set_software_volume_config
+    cecho "green" "✓ shairport-sync set to software volume (output_format S32, volume_max_db 0)"
+
+    if pin_hardware_volume_max "$card_number"; then
+        cecho "green" "✓ Hardware volume pinned to maximum"
     fi
+    restart_service
+    cecho "blue" "  Current level on card $card_number:"
+    amixer -c "$card_number" sget PCM 2>/dev/null | grep -E '\[[0-9]+%\]' | head -2 || true
 }
 
 action_change_volume_limits() {
@@ -584,7 +614,7 @@ main() {
         echo "   2) Change audio output device"
         echo "   3) Change mixer / hardware volume control"
         echo "   4) Change volume limits (volume_max_db, default_airplay_volume)"
-        echo "  15) Set hardware volume to MAX now + on every boot"
+        echo "  15) Independent volumes: software volume + pin DAC at MAX (recommended)"
         echo "   5) Test audio output"
         echo "   6) View configuration"
         echo "   7) Show service status"
