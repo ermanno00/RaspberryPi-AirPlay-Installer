@@ -28,6 +28,12 @@ IFS=$'\n\t'
 SCRIPT_VERSION="1.0"
 CONFIG_FILE="/etc/shairport-sync.conf"
 SERVICE_NAME="shairport-sync"
+
+# Pinned stable upstream versions — must match install_airplay_v3.sh.
+# Building from `master` pulls Shairport-Sync 5.0-dev, which crashes on some
+# DACs with "Unexpected SPS_FORMAT_* with index N while outputting silence".
+SHAIRPORT_VERSION="4.3.7"
+NQPTP_VERSION="1.2.8"
 BACKUP_DIR="$HOME/airplay-repair-backup-$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="/tmp/airplay-repair-$(date +%Y%m%d-%H%M%S).log"
 
@@ -121,7 +127,9 @@ rebuild_nqptp() {
 
     safe_cd /tmp
     rm -rf nqptp 2>/dev/null || true
-    if ! git clone https://github.com/mikebrady/nqptp.git 2>&1 | tee -a "$LOG_FILE"; then
+    log "Pinning NQPTP to release $NQPTP_VERSION"
+    if ! git clone --branch "$NQPTP_VERSION" --depth 1 \
+            https://github.com/mikebrady/nqptp.git 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Failed to clone NQPTP repository (check your internet connection)"
         exit 1
     fi
@@ -164,7 +172,9 @@ rebuild_shairport() {
 
     safe_cd /tmp
     rm -rf shairport-sync 2>/dev/null || true
-    if ! git clone https://github.com/mikebrady/shairport-sync.git 2>&1 | tee -a "$LOG_FILE"; then
+    log "Pinning Shairport-Sync to release $SHAIRPORT_VERSION"
+    if ! git clone --branch "$SHAIRPORT_VERSION" --depth 1 \
+            https://github.com/mikebrady/shairport-sync.git 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Failed to clone Shairport-Sync repository (check your internet connection)"
         exit 1
     fi

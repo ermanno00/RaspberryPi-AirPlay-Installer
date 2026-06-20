@@ -26,6 +26,17 @@ LOG_FILE="/tmp/airplay_install_$(date +%Y%m%d_%H%M%S).log"
 BACKUP_DIR="/tmp/airplay_backup_$(date +%Y%m%d_%H%M%S)"
 INSTALLATION_FAILED=0
 
+# Pinned upstream versions.
+# We deliberately build from stable release tags instead of the `master`
+# branches. Shairport-Sync 5.0 is a major rewrite that introduced a new
+# "encoded output format" engine; recent dev builds crash on some DACs with
+# "fatal error: Unexpected SPS_FORMAT_* with index N while outputting silence".
+# 5.0 also changed the config-file format, which our sed edits below do not
+# target. The 4.3.x line is the long-proven AirPlay 2 stable line and uses the
+# config keys this installer writes. nqptp 1.2.8 is the matching stable timer.
+SHAIRPORT_VERSION="4.3.7"
+NQPTP_VERSION="1.2.8"
+
 # Audio configuration variables
 audio_device=""
 audio_device_plug=""
@@ -538,10 +549,21 @@ install_spotify_connect() {
         sudo apt-get update -qq 2>&1 | tee -a "$LOG_FILE" || true
     fi
 
+    # Mask raspotify BEFORE installing it. The deb's post-install hook
+    # auto-starts the service, and at that point /etc/raspotify/conf still has
+    # no LIBRESPOT_NAME, so librespot would briefly advertise the package
+    # default "raspotify (<hostname>)" over zeroconf. The Spotify app caches the
+    # first name it discovers, so that brief window is enough to make the wrong
+    # name stick. Masking blocks the auto-start; we unmask and start it below,
+    # only after the correct name is written, so the very first advertisement
+    # already carries our name.
+    sudo systemctl mask raspotify 2>/dev/null || true
+
     log "Installing raspotify package..."
     if ! sudo apt-get install -y raspotify 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Failed to install raspotify"
         cecho "yellow" "   Skipping Spotify Connect installation, continuing..."
+        sudo systemctl unmask raspotify 2>/dev/null || true
         install_spotify=false
         return 0
     fi
@@ -576,10 +598,10 @@ LIBRESPOT_ZEROCONF_PORT="$SPOTIFY_ZEROCONF_PORT"
 # <<< airplay-installer <<<
 EOF
 
-    # The raspotify unit was just installed by apt and auto-started with the
-    # default name. Reload units and do a clean stop→start (not a plain restart
-    # against the apt-spawned transitional state) so librespot re-reads the conf
-    # and advertises our name from a fresh process.
+    # raspotify was masked before install, so it has never run yet. Unmask it
+    # now that the correct name is in the conf, then enable and start it: the
+    # very first zeroconf advertisement already carries our name.
+    sudo systemctl unmask raspotify 2>&1 | tee -a "$LOG_FILE" || true
     sudo systemctl daemon-reload 2>&1 | tee -a "$LOG_FILE" || true
     sudo systemctl enable raspotify 2>&1 | tee -a "$LOG_FILE" || true
     sudo systemctl stop raspotify 2>/dev/null || true
@@ -756,7 +778,9 @@ main() {
     safe_cd /tmp
     rm -rf nqptp 2>/dev/null || true
 
-    if ! git clone https://github.com/mikebrady/nqptp.git 2>&1 | tee -a "$LOG_FILE"; then
+    log "Pinning NQPTP to release $NQPTP_VERSION"
+    if ! git clone --branch "$NQPTP_VERSION" --depth 1 \
+            https://github.com/mikebrady/nqptp.git 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Failed to clone NQPTP repository"
         cecho "yellow" "   Possible causes:"
         cecho "yellow" "   - No internet connection"
@@ -816,7 +840,9 @@ main() {
     safe_cd /tmp
     rm -rf shairport-sync 2>/dev/null || true
 
-    if ! git clone https://github.com/mikebrady/shairport-sync.git 2>&1 | tee -a "$LOG_FILE"; then
+    log "Pinning Shairport-Sync to release $SHAIRPORT_VERSION"
+    if ! git clone --branch "$SHAIRPORT_VERSION" --depth 1 \
+            https://github.com/mikebrady/shairport-sync.git 2>&1 | tee -a "$LOG_FILE"; then
         cecho "red" "❌ Failed to clone Shairport-Sync repository"
         cecho "yellow" "   Possible causes:"
         cecho "yellow" "   - No internet connection"
