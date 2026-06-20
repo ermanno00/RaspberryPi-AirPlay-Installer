@@ -553,6 +553,14 @@ install_spotify_connect() {
         return 0
     fi
 
+    # Defensive: never write an empty name. raspotify.service ships a default
+    # Environment="LIBRESPOT_NAME=raspotify (%H)"; an empty value here would let
+    # that default win and the speaker would show the wrong name.
+    if [ -z "$spotify_name" ]; then
+        spotify_name="${airplay_name:-$(hostname)}"
+        log "spotify_name was empty — falling back to '$spotify_name'"
+    fi
+
     log "Configuring raspotify: name='$spotify_name' device='$audio_device_plug'"
     sudo cp "$raspotify_conf" "$BACKUP_DIR/raspotify.conf" 2>/dev/null || true
 
@@ -568,12 +576,28 @@ LIBRESPOT_ZEROCONF_PORT="$SPOTIFY_ZEROCONF_PORT"
 # <<< airplay-installer <<<
 EOF
 
+    # The raspotify unit was just installed by apt and auto-started with the
+    # default name. Reload units and do a clean stop→start (not a plain restart
+    # against the apt-spawned transitional state) so librespot re-reads the conf
+    # and advertises our name from a fresh process.
+    sudo systemctl daemon-reload 2>&1 | tee -a "$LOG_FILE" || true
     sudo systemctl enable raspotify 2>&1 | tee -a "$LOG_FILE" || true
-    sudo systemctl restart raspotify 2>&1 | tee -a "$LOG_FILE" || true
+    sudo systemctl stop raspotify 2>/dev/null || true
+    sleep 1
+    sudo systemctl start raspotify 2>&1 | tee -a "$LOG_FILE" || true
     sleep 3
+
+    # Verify the name actually landed in the conf (catches a silently-failed write)
+    if grep -qE "^LIBRESPOT_NAME=\"?${spotify_name}\"?$" "$raspotify_conf" 2>/dev/null; then
+        log "Verified LIBRESPOT_NAME='$spotify_name' in $raspotify_conf"
+    else
+        cecho "yellow" "⚠ Could not verify the Spotify name in $raspotify_conf"
+    fi
 
     if check_service "raspotify"; then
         cecho "green" "✓ Spotify Connect (raspotify) is running as '$spotify_name'"
+        cecho "blue"  "  Note: if Spotify still shows the old name, fully close and"
+        cecho "blue"  "        reopen the Spotify app (it caches discovered devices)."
     else
         cecho "yellow" "⚠ raspotify service is not active — check 'journalctl -u raspotify'"
     fi
