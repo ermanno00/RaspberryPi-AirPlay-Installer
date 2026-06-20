@@ -78,6 +78,8 @@ sudo systemctl stop nqptp 2>/dev/null || true
 sudo systemctl stop raspotify 2>/dev/null || true
 
 cecho "blue" "Disabling services..."
+sudo systemctl stop airplay-volume 2>/dev/null || true
+sudo systemctl disable airplay-volume 2>/dev/null || true
 sudo systemctl disable shairport-sync 2>/dev/null || true
 sudo systemctl disable nqptp 2>/dev/null || true
 sudo systemctl disable raspotify 2>/dev/null || true
@@ -102,6 +104,8 @@ sudo rm -f /usr/local/lib/systemd/system/shairport-sync.service
 sudo rm -f /lib/systemd/system/nqptp.service
 sudo rm -f /etc/systemd/system/nqptp.service
 sudo rm -f /usr/local/lib/systemd/system/nqptp.service
+sudo rm -f /lib/systemd/system/airplay-volume.service
+sudo rm -rf /etc/systemd/system/raspotify.service.d
 sudo systemctl daemon-reload
 sudo systemctl reset-failed 2>/dev/null || true
 

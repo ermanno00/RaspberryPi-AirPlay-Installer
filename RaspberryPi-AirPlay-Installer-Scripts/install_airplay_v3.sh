@@ -587,6 +587,18 @@ LIBRESPOT_ZEROCONF_PORT="$SPOTIFY_ZEROCONF_PORT"
 # <<< airplay-installer <<<
 EOF
 
+    # Belt-and-suspenders for the device name. The raspotify unit ships an inline
+    # default Environment=LIBRESPOT_NAME="%N (%H)" (i.e. "raspotify (hostname)").
+    # The conf above is loaded via EnvironmentFile, which should override that
+    # default — but to remove any ambiguity we also drop in a systemd override
+    # that sets the same name. A drop-in is merged after the main unit, so our
+    # value deterministically wins and the speaker advertises the chosen name.
+    sudo mkdir -p /etc/systemd/system/raspotify.service.d
+    sudo tee /etc/systemd/system/raspotify.service.d/airplay-installer.conf > /dev/null <<EOF
+[Service]
+Environment=LIBRESPOT_NAME=$spotify_name
+EOF
+
     # The raspotify unit was just installed by apt and auto-started with the
     # default name. Reload units and do a clean stop→start (not a plain restart
     # against the apt-spawned transitional state) so librespot re-reads the conf
@@ -961,6 +973,35 @@ FALLBACK_EOF
             cecho "green" "✓ Mixer volume set to maximum"
         else
             cecho "yellow" "⚠ Could not set mixer volume (may not be supported)"
+        fi
+
+        # Persist max volume across reboots.
+        # `alsactl store` (above) saves the state to asound.state and is normally
+        # restored at boot by alsa-restore.service, but on several Pi OS images the
+        # mixer comes up around 50% regardless (the saved state isn't restored for
+        # the selected card, or another component lowers it). We install a tiny
+        # boot-time oneshot that forces the mixer to 100% on every boot, ordered
+        # before shairport-sync so playback always starts at full hardware volume.
+        cecho "blue" "Installing boot-time max-volume service..."
+        sudo tee /lib/systemd/system/airplay-volume.service > /dev/null <<EOF
+[Unit]
+Description=Set ALSA mixer to maximum volume for AirPlay
+After=sound.target alsa-restore.service
+Before=shairport-sync.service raspotify.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/amixer -c $card_number set "$mixer_control" 100% unmute
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        sudo systemctl daemon-reload 2>&1 | tee -a "$LOG_FILE" || true
+        if sudo systemctl enable airplay-volume.service 2>&1 | tee -a "$LOG_FILE"; then
+            cecho "green" "✓ Max volume will be re-applied on every boot"
+        else
+            cecho "yellow" "⚠ Could not enable boot-time volume service"
         fi
     fi
     echo

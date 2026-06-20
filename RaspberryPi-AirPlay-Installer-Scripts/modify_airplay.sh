@@ -121,6 +121,15 @@ LIBRESPOT_INITIAL_VOLUME="100"
 LIBRESPOT_ZEROCONF_PORT="$SPOTIFY_ZEROCONF_PORT"
 # <<< airplay-installer <<<
 EOF
+
+    # Keep the systemd drop-in in sync so our name always overrides the unit's
+    # inline default Environment=LIBRESPOT_NAME="%N (%H)". See install script.
+    sudo mkdir -p /etc/systemd/system/raspotify.service.d
+    sudo tee /etc/systemd/system/raspotify.service.d/airplay-installer.conf > /dev/null <<EOF
+[Service]
+Environment=LIBRESPOT_NAME=$name
+EOF
+    sudo systemctl daemon-reload 2>/dev/null || true
 }
 
 restart_spotify() {
