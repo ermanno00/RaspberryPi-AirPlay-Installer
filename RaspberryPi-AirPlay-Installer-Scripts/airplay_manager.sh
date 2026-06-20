@@ -97,6 +97,7 @@ while true; do
     echo "  2) Modify existing installation"
     echo "  3) Uninstall"
     echo "  4) Show service logs (live, Ctrl+C to exit)"
+    echo "  5) Rebuild / repair (fixes crashes after 'apt upgrade')"
     echo "  0) Exit"
     echo
     read -p "Choose: " choice || true
@@ -125,6 +126,14 @@ while true; do
                 continue
             fi
             sudo journalctl -u shairport-sync -f || true
+            ;;
+        5)
+            if ! is_installed; then
+                cecho "red" "❌ No installation detected. Install first."
+                read -p "Press Enter..." || true
+                continue
+            fi
+            run_script "repair_airplay.sh"
             ;;
         0|q|Q|"") cecho "blue" "Bye!"; exit 0 ;;
         *) cecho "red" "Invalid choice."; sleep 1 ;;

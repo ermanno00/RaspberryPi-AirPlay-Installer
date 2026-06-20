@@ -11,6 +11,7 @@ set -eo pipefail
 IFS=$'\n\t'
 
 SCRIPT_VERSION="1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="/etc/shairport-sync.conf"
 SERVICE_NAME="shairport-sync"
 RASPOTIFY_CONF="/etc/raspotify/conf"
@@ -361,6 +362,17 @@ action_service_status() {
     sudo systemctl status nqptp --no-pager -l | head -10 || true
 }
 
+action_rebuild() {
+    local repair="$SCRIPT_DIR/repair_airplay.sh"
+    if [ ! -f "$repair" ]; then
+        cecho "red" "❌ repair_airplay.sh not found next to this script."
+        return
+    fi
+    cecho "blue" "Launching rebuild / repair..."
+    echo
+    bash "$repair" || true
+}
+
 # --- Spotify actions ---
 action_install_spotify() {
     if spotify_installed; then
@@ -502,6 +514,7 @@ main() {
         echo "   7) Show service status"
         echo "   8) Restart service"
         echo "   9) Edit configuration file manually (nano)"
+        echo "  14) Rebuild / repair (fixes crashes after 'apt upgrade')"
         echo
         cecho "cyan" " Spotify Connect:"
         echo "  10) Install / reconfigure Spotify Connect"
@@ -527,6 +540,7 @@ main() {
             11) action_change_spotify_name ;;
             12) action_sync_spotify_to_airplay ;;
             13) action_uninstall_spotify ;;
+            14) action_rebuild ;;
             0|q|Q|"") cecho "blue" "Bye!"; return 0 ;;
             *)  cecho "red" "Invalid choice." ;;
         esac
